@@ -2,7 +2,7 @@
 
 Simple serial monitor, using read, wirte device method
 
-# Command:
+# command:
         ./monitor -f </dev/port_name> -b <baud_rate> -a <byte>
         
 e.g:    ./monitor -f /dev/ttyUSB0 -b 115200 -a 1024
