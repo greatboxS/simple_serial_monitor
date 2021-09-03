@@ -35,55 +35,134 @@ static char file[256] = {0};
 static speed_t monitor_baud = DEFAULT_BAUD;
 static uint8_t *monitor_buffer = NULL;
 static int monitor_buff_size = DEFAULT_MONITOR_BUFFER_SIZE;
-
+static bool is_open = false;
+static bool e_read = false;
+static bool e_write = false;
+static bool is_init = false;
+static bool is_thread_start = false;
 static speed_t get_baud_code(speed_t b);
 static int monitor_thread_func(void *arg);
 static void monitor_config(int fd, speed_t baud);
+static int monitor_open();
 
-
+// Initialize the monitor first to start monitor
 int monitor_init(const char *d_file, int baud)
 {
     monitor_baud = get_baud_code(baud);
     memccpy(file, d_file, 0, strlen(d_file));
 
-    //open serial port dev file
-    fd = open(file, O_RDWR | O_NDELAY | O_NOCTTY | O_SYNC); //  will disable timeout setting
-    if (fd > 0)
-        printf("Open %s successfully\n", file);
-    else
-    {
-        printf("Open %s failed\n", file);
+    if (monitor_open() < 0)
         return -1;
-    }
+
     // config serial port
     monitor_config(fd, monitor_baud);
+
     // create mutex
     if (mtx_init(&mutex, mtx_plain) == thrd_success)
     {
         printf("Mutex initializes successfully\n");
     }
-    else 
+    else
         goto error;
     // allocate new buffer
-    if(monitor_set_buff_size(monitor_buff_size))
+    if (monitor_set_buff_size(monitor_buff_size))
     {
         printf("Create buffer successfully\n");
     }
     else
         goto error;
-    // create monitor thread
-    if (thrd_create(&monitor_thread, monitor_thread_func, NULL) == thrd_success)
-    {
-        printf("Create monitor thread successfully\n");
-    }
-    else
-        goto error;
 
 success:
+    monitor_enable_read(true);
+    monitor_enable_write(true);
+    is_init = true;
     return 0;
 
 error:
     close(fd);
+    return -1;
+}
+
+int monitor_open()
+{
+    monitor_close();
+
+    //open serial port dev file
+    fd = open(file, O_RDWR | O_NDELAY | O_NOCTTY | O_SYNC); //  will disable timeout setting
+    if (fd > 0)
+    {
+        printf("Open %s successfully\n", file);
+        is_open = true;
+        return 0;
+    }
+    else
+    {
+        printf("Open %s failed\n", file);
+        is_open = false;
+        return -1;
+    }
+}
+
+void monitor_close()
+{
+    if (is_open)
+    {
+        printf("Monitor is closed\n");
+        monitor_enable_read(false);
+        monitor_enable_write(false);
+        mtx_lock(&mutex);
+        is_open = false;
+        mtx_unlock(&mutex);
+        close(fd);
+    }
+}
+// enable or disable read function
+void monitor_enable_read(bool r)
+{
+    mtx_lock(&mutex);
+    e_read = r;
+    mtx_unlock(&mutex);
+}
+
+// enable or disable write function
+void monitor_enable_write(bool w)
+{
+    mtx_lock(&mutex);
+    e_write = w;
+    mtx_unlock(&mutex);
+}
+
+int monitor_start()
+{
+    if (!is_init)
+        goto error;
+
+    if (!is_open)
+    {
+        if (monitor_init(file, monitor_baud) < 0)
+            goto error;
+    }
+
+    // thread is created by user
+    if(is_thread_start)
+    {
+        printf("Monitor is starting\n");
+        return 0;
+    }
+
+    // create monitor thread
+    if (thrd_create(&monitor_thread, monitor_thread_func, NULL) == thrd_success)
+    {
+        printf("Start monitor successfully\n");
+        monitor_enable_read(true); // make sure enable read in default
+        monitor_enable_write(true);
+        is_thread_start = true;
+        return 0;
+    }
+
+error:
+    printf("Failed to start monitor\n");
+    monitor_close();
     return -1;
 }
 
@@ -92,6 +171,11 @@ int monitor_thread_func(void *arg)
     for (;;)
     {
         mtx_lock(&mutex);
+        if (!is_open || !e_read)
+        {
+            mtx_unlock(&mutex);
+            continue;
+        }
         int nbyte = read(fd, monitor_buffer, monitor_buff_size);
         if (nbyte > 0)
         {
@@ -109,8 +193,8 @@ int monitor_set_buff_size(size_t size)
 {
     if (size == 0)
         return -1;
-        
-    if(size < MONITOR_BUFF_MIN_SIZE)
+
+    if (size < MONITOR_BUFF_MIN_SIZE)
         size = MONITOR_BUFF_MIN_SIZE;
 
     monitor_buff_size = size;
@@ -130,6 +214,11 @@ int monitor_set_buff_size(size_t size)
 int monitor_write(uint8_t *buffer, size_t len)
 {
     mtx_lock(&mutex);
+    if (!is_open || !e_write)
+    {
+        mtx_unlock(&mutex);
+        return -1;
+    }
     int nbyte = write(fd, buffer, len);
     mtx_unlock(&mutex);
     return nbyte;
@@ -170,29 +259,36 @@ void monitor_config(int fd, speed_t baud)
     tcsetattr(fd, TCSANOW, &options);
 }
 
-int monitor_read_string(int fd, uint8_t *buf, int timeout)
+int monitor_read_string(uint8_t *buf, int timeout)
 {
+    int i = timeout;
+    int bytes = -1;
+
     if (buf == NULL)
         return -1;
-    int i = timeout / 10;
-    int bytes = 0;
+
+    mtx_lock(&mutex);
+
+    if (!is_open)
+        goto exit;
 
     while (i > 0)
     {
-        usleep(1000 * 10);
+        usleep(1000);
         uint8_t c = 0;
-        read(fd, &c, 1);
-        if (c)
+        if (read(fd, &c, 1) > 0)
         {
             buf[bytes] = c;
             bytes++;
-            i = timeout / 10;
-        }
+            i = timeout;
 
-        if (c == '\n')
-            return bytes;
+            if (c == '\n' || c == '\r')
+                goto exit;
+        }
         i--;
     }
+exit:
+    mtx_unlock(&mutex);
     return bytes;
 }
 
