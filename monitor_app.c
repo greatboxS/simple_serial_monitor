@@ -13,22 +13,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <pthread.h>
-#include <unistd.h>
-#include <signal.h>
-//
-#define BUFF_SIZE (1024 * 10)
-#define FILE_PRE_CMD "-f"
-#define BAUD_PRE_CMD "-b"
-#define MONITOR_BUFFER "-a"
-//
-#define CMD_STA_MO ((int)(1 << 1))
-#define CMD_CLS_MO ((int)(1 << 2))
-#define CMD_R_LINE ((int)(1 << 3))
-#define CMD_DIS_R ((int)(1 << 4))
-#define CMD_ENA_R ((int)(1 << 5))
-#define CMD_DIS_W ((int)(1 << 6))
-#define CMD_ENA_W ((int)(1 << 7))
-//
+#include "monitor_app.h"
+
 static char file_name[256] = {0};
 static unsigned int baud = DEFAULT_BAUD;
 static char *w_buffer = NULL;
@@ -38,6 +24,26 @@ static int len = 0;
 static size_t buffer_size = DEFAULT_MONITOR_BUFFER_SIZE;
 static bool cancelation_token = false;
 pthread_mutex_t mutex;
+
+const char *helper =
+    "\n-------------------------------------------------------------------------\n"
+    "\t\t\tSerial Monitor\n"
+    "-------------------------------------------------------------------------\n"
+    "command:\tmonitor -f </dev/port_name> -b <baud_rate> -a <byte>\n"
+    "example:\tmonitor -f /dev/ttyUSB0 -b 115200 -a 1024\n"
+    "-------------------------------------------------------------------------\n"
+    "additional cmds:\n"
+    "\t-m start        -start monitor"
+    "\n\t-m stop         -stop monitor"
+    "\n\t-r dis          -disable read"
+    "\n\t-r ena          -enable read / have to enable after use -r line\n"
+    "\n\t-r line <num>   -read <num> line from serial port"
+    "\n\t\t\t press \"e\" / \"q\" to cancel"
+    "\n\t\t\t read line function disable monitor func"
+    "\n\t\t\t enable read after use -r line <num> function\n"
+    "\n\t-w dis          -diable write"
+    "\n\t-w ena          -enable write\n"
+    "-------------------------------------------------------------------------\n";
 //
 void parse_arg(int argc, char *args[]);
 char *strlwr(char *str);
@@ -109,46 +115,51 @@ int monitor_check_cmd(char *buf)
     if (!buf)
         return cmd;
 
-    if (strstr(buf, "-m start") != NULL)
+    if (strstr(buf, CMD_STA_STR) != NULL)
     {
         printf("cmd: start monitor\n");
         monitor_start();
         cmd |= CMD_STA_MO;
     }
-    if (strstr(buf, "-m stop") != NULL)
+    if (strstr(buf, CMD_CLS_STR) != NULL)
     {
         printf("cmd: stop monitor\n");
         monitor_close();
         cmd |= CMD_CLS_MO;
     }
-    if (strstr(buf, "-r ena") != NULL)
+    if (strstr(buf, CMD_ENA_R_STR) != NULL)
     {
         printf("cmd: enable read\n");
         monitor_enable_read(true);
         cmd |= CMD_ENA_R;
     }
-    if (strstr(buf, "-r dis") != NULL)
+    if (strstr(buf, CMD_DIS_R_STR) != NULL)
     {
         printf("cmd: disable read\n");
         monitor_enable_read(false);
         cmd |= CMD_DIS_R;
     }
-    if (strstr(buf, "-w ena") != NULL)
+    if (strstr(buf, CMD_ENA_W_STR) != NULL)
     {
         printf("cmd: enab;e write\n");
         monitor_enable_write(true);
         cmd |= CMD_ENA_W;
     }
-    if (strstr(buf, "-w dis") != NULL)
+    if (strstr(buf, CMD_DIS_W_STR) != NULL)
     {
         printf("cmd: disable write\n");
         monitor_enable_write(false);
         cmd |= CMD_DIS_W;
     }
-    if (strstr(buf, "-r line") != NULL)
+    if (strstr(buf, CMD_MONITOR_HELP) != NULL)
+    {
+        printf("%s\n", helper);
+        cmd |= CMD_HELPER;
+    }
+    if (strstr(buf, CMD_R_LINE_STR) != NULL)
     {
         printf("cmd: read line\n");
-        char *sub_s = strstr(buf, "-r line") + 7;
+        char *sub_s = strstr(buf, CMD_R_LINE_STR) + 7;
 
         int line = 1;
         if (sub_s != NULL)
@@ -170,10 +181,10 @@ int monitor_check_cmd(char *buf)
             bool cancel = false;
             if (nbyte = getline(&w_buffer, &len, stdin))
             {
-                if (strstr(w_buffer, "q") != NULL)
+                if (strstr(w_buffer, CMD_EXIT_R_L_STR_1) != NULL)
                     cancel = true;
 
-                if (strstr(w_buffer, "e") != NULL)
+                if (strstr(w_buffer, CMD_EXIT_R_L_STR_2) != NULL)
                     cancel = true;
             }
             if (cancel)
@@ -215,14 +226,19 @@ void parse_arg(int argc, char *args[])
     for (size_t i = 0; i < argc; i++)
     {
         const char *s = strlwr(args[i]);
-        if (strstr(s, "-f") != NULL)
+        if (strstr(s, CMD_MONITOR_HELP) != NULL)
+        {
+
+            printf("%s\n", helper);
+        }
+        if (strstr(s, CMD_FILE_PRE) != NULL)
         {
             if (i + 1 >= argc)
                 break;
             snprintf(file_name, sizeof(file_name), "%s", args[i + 1]);
         }
 
-        if (strstr(s, "-b") != NULL)
+        if (strstr(s, CMD_BAUD_PRE) != NULL)
         {
             if (i + 1 >= argc)
                 break;
@@ -231,7 +247,7 @@ void parse_arg(int argc, char *args[])
                 baud = DEFAULT_BAUD;
         }
 
-        if (strstr(s, "-a") != NULL)
+        if (strstr(s, CMD_MONITOR_BUFFER) != NULL)
         {
             if (i + 1 >= argc)
                 break;
