@@ -1,4 +1,4 @@
-# simple_serial_monitor
+# simple serial monitor for linux
 
 Simple serial monitor, using read, wirte device method
 
