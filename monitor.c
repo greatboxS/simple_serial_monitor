@@ -139,7 +139,7 @@ int monitor_start()
 
     if (!is_open)
     {
-        if (monitor_init(file, monitor_baud) < 0)
+        if (monitor_open() < 0)
             goto error;
     }
 
